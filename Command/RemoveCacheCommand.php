@@ -13,6 +13,7 @@ namespace Liip\ImagineBundle\Command;
 
 use Liip\ImagineBundle\Imagine\Cache\CacheManager;
 use Liip\ImagineBundle\Imagine\Filter\FilterManager;
+use Liip\ImagineBundle\Service\FilterService;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputArgument;
 use Symfony\Component\Console\Input\InputInterface;
@@ -21,16 +22,22 @@ use Symfony\Component\Console\Output\OutputInterface;
 
 class RemoveCacheCommand extends Command
 {
-    protected static $defaultName = 'liip:imagine:cache:remove';
-
     use CacheCommandTrait;
 
-    public function __construct(CacheManager $cacheManager, FilterManager $filterManager)
+    protected static $defaultName = 'liip:imagine:cache:remove';
+
+    /**
+     * @var FilterService
+     */
+    private $filterService;
+
+    public function __construct(CacheManager $cacheManager, FilterManager $filterManager, FilterService $filterService)
     {
         parent::__construct();
 
         $this->cacheManager = $cacheManager;
         $this->filterManager = $filterManager;
+        $this->filterService = $filterService;
     }
 
     protected function configure(): void
@@ -46,7 +53,7 @@ class RemoveCacheCommand extends Command
             ->addOption('as-script', 'S', InputOption::VALUE_NONE,
                 'Write only machine-readable output; silenced verbose reporting and implies --no-colors.')
             ->setHelp(<<<'EOF'
-The <comment>%command.name%</comment> command removes the passed image(s) cache entry for the 
+The <comment>%command.name%</comment> command removes the passed image(s) cache entry for the
 resolved filter(s), outputting results using the following basic format:
   <info>image.ext[filter] (removed|skipped|failure)[: (image-path|exception-message)]</>
 
@@ -80,9 +87,9 @@ EOF
         if (empty($images)) {
             $this->cacheManager->remove(null, $filters);
         } else {
-            foreach ($images as $i) {
-                foreach ($filters as $f) {
-                    $this->runCacheImageRemove($i, $f);
+            foreach ($images as $image) {
+                foreach ($filters as $filter) {
+                    $this->runCacheImageRemove($image, $filter);
                 }
             }
         }
@@ -100,8 +107,7 @@ EOF
 
         $this->io->group($image, $filter, 'blue');
 
-        if ($this->cacheManager->isStored($image, $filter)) {
-            $this->cacheManager->remove($image, $filter);
+        if ($this->filterService->bustCache($image, $filter)) {
             $this->io->status('removed', 'green');
         } else {
             $this->io->status('skipped', 'yellow');

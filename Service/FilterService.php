@@ -182,7 +182,7 @@ class FilterService
     ): string {
         $path = $filterPathContainer->getTarget();
 
-        if ($this->webpGenerate && $webpSupported) {
+        if ($webpSupported) {
             $path = $filterPathContainer->createWebp($this->webpOptions)->getTarget();
         }
 

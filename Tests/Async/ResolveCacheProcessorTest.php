@@ -292,6 +292,7 @@ class ResolveCacheProcessorTest extends AbstractTest
 
     public function testShouldBurstCacheWhenResolvingForced(): void
     {
+        $force = true;
         $filterName = 'fooFilter';
         $imagePath = 'theImagePath';
 
@@ -306,8 +307,8 @@ class ResolveCacheProcessorTest extends AbstractTest
         $filterServiceMock = $this->createFilterServiceMock();
         $filterServiceMock
             ->expects($this->once())
-            ->method('bustCache')
-            ->with($imagePath, $filterName);
+            ->method('warmUpCache')
+            ->with($imagePath, $filterName, null, $force);
 
         $processor = new ResolveCacheProcessor(
             $filterManagerMock,
@@ -316,7 +317,7 @@ class ResolveCacheProcessorTest extends AbstractTest
         );
 
         $message = new NullMessage();
-        $message->setBody(json_encode(['path' => $imagePath, 'force' => true]));
+        $message->setBody(json_encode(['path' => $imagePath, 'force' => $force]));
 
         $result = $processor->process($message, new NullContext());
 

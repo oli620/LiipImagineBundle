@@ -12,8 +12,8 @@
 namespace Liip\ImagineBundle\Command;
 
 use Liip\ImagineBundle\Imagine\Cache\CacheManager;
-use Liip\ImagineBundle\Imagine\Data\DataManager;
 use Liip\ImagineBundle\Imagine\Filter\FilterManager;
+use Liip\ImagineBundle\Service\FilterService;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputArgument;
 use Symfony\Component\Console\Input\InputInterface;
@@ -22,22 +22,22 @@ use Symfony\Component\Console\Output\OutputInterface;
 
 class ResolveCacheCommand extends Command
 {
-    protected static $defaultName = 'liip:imagine:cache:resolve';
-
     use CacheCommandTrait;
 
-    /**
-     * @var DataManager
-     */
-    private $dataManager;
+    protected static $defaultName = 'liip:imagine:cache:resolve';
 
-    public function __construct(DataManager $dataManager, CacheManager $cacheManager, FilterManager $filterManager)
+    /**
+     * @var FilterService
+     */
+    private $filterService;
+
+    public function __construct(CacheManager $cacheManager, FilterManager $filterManager, FilterService $filterService)
     {
         parent::__construct();
 
-        $this->dataManager = $dataManager;
         $this->cacheManager = $cacheManager;
         $this->filterManager = $filterManager;
+        $this->filterService = $filterService;
     }
 
     protected function configure(): void
@@ -91,9 +91,9 @@ EOF
         $forced = $input->getOption('force');
         [$images, $filters] = $this->resolveInputFiltersAndPaths($input);
 
-        foreach ($images as $i) {
-            foreach ($filters as $f) {
-                $this->runCacheImageResolve($i, $f, $forced);
+        foreach ($images as $image) {
+            foreach ($filters as $filter) {
+                $this->runCacheImageResolve($image, $filter, $forced);
             }
         }
 
@@ -111,8 +111,7 @@ EOF
         $this->io->group($image, $filter, 'blue');
 
         try {
-            if ($forced || !$this->cacheManager->isStored($image, $filter)) {
-                $this->cacheManager->store($this->filterManager->applyFilter($this->dataManager->find($filter, $image), $filter), $image, $filter);
+            if ($this->filterService->warmUpCache($image, $filter, null, $forced)) {
                 $this->io->status('resolved', 'green');
             } else {
                 $this->io->status('cached', 'white');
