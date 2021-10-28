@@ -47,18 +47,10 @@ class FilterService
     private $webpGenerate;
 
     /**
-     * @var array
+     * @var mixed[]
      */
     private $webpOptions;
 
-    /**
-     * @param DataManager          $dataManager
-     * @param FilterManager        $filterManager
-     * @param CacheManager         $cacheManager
-     * @param bool                 $webpGenerate
-     * @param array                $webpOptions
-     * @param LoggerInterface|null $logger
-     */
     public function __construct(
         DataManager $dataManager,
         FilterManager $filterManager,
@@ -78,44 +70,66 @@ class FilterService
     /**
      * @param string $path
      * @param string $filter
+     *
+     * @return bool Returns true if we removed at least one cached image
      */
     public function bustCache($path, $filter)
     {
-        $basePathContainer = new FilterPathContainer($path);
-        $filterPathContainers = [$basePathContainer];
+        $busted = false;
 
-        if ($this->webpGenerate) {
-            $filterPathContainers[] = $basePathContainer->createWebp($this->webpOptions);
-        }
-
-        foreach ($filterPathContainers as $filterPathContainer) {
+        foreach ($this->buildFilterPathContainers($path) as $filterPathContainer) {
             if ($this->cacheManager->isStored($filterPathContainer->getTarget(), $filter)) {
                 $this->cacheManager->remove($filterPathContainer->getTarget(), $filter);
+
+                $busted = true;
             }
         }
+
+        return $busted;
+    }
+
+    /**
+     * @param bool $forced Force warm up cache
+     *
+     * @return bool Returns true if the cache is warmed up
+     */
+    public function warmUpCache(
+        string $path,
+        string $filter,
+        ?string $resolver = null,
+        bool $forced = false
+    ): bool {
+        $warmedUp = false;
+
+        foreach ($this->buildFilterPathContainers($path) as $filterPathContainer) {
+            if ($this->warmUpCacheFilterPathContainer($filterPathContainer, $filter, $resolver, $forced)) {
+                $warmedUp = true;
+            }
+        }
+
+        return $warmedUp;
     }
 
     /**
      * @param string      $path
      * @param string      $filter
      * @param string|null $resolver
-     * @param bool        $webpSupported
      *
      * @return string
      */
     public function getUrlOfFilteredImage($path, $filter, $resolver = null, bool $webpSupported = false)
     {
-        $basePathContainer = new FilterPathContainer($path);
+        foreach ($this->buildFilterPathContainers($path) as $filterPathContainer) {
+            $this->warmUpCacheFilterPathContainer($filterPathContainer, $filter, $resolver);
+        }
 
-        return $this->getUrlOfFilteredImageByContainer($basePathContainer, $filter, $resolver, $webpSupported);
+        return $this->resolveFilterPathContainer(new FilterPathContainer($path), $filter, $resolver, $webpSupported);
     }
 
     /**
      * @param string      $path
      * @param string      $filter
-     * @param array       $runtimeFilters
      * @param string|null $resolver
-     * @param bool        $webpSupported
      *
      * @return string
      */
@@ -127,59 +141,81 @@ class FilterService
         bool $webpSupported = false
     ) {
         $runtimePath = $this->cacheManager->getRuntimePath($path, $runtimeFilters);
-        $basePathContainer = new FilterPathContainer($path, $runtimePath, [
+        $runtimeOptions = [
             'filters' => $runtimeFilters,
-        ]);
+        ];
 
-        return $this->getUrlOfFilteredImageByContainer($basePathContainer, $filter, $resolver, $webpSupported);
+        foreach ($this->buildFilterPathContainers($path, $runtimePath, $runtimeOptions) as $filterPathContainer) {
+            $this->warmUpCacheFilterPathContainer($filterPathContainer, $filter, $resolver);
+        }
+
+        return $this->resolveFilterPathContainer(
+            new FilterPathContainer($path, $runtimePath, $runtimeOptions),
+            $filter,
+            $resolver,
+            $webpSupported
+        );
     }
 
     /**
-     * @param FilterPathContainer $basePathContainer
-     * @param string              $filter
-     * @param string|null         $resolver
-     * @param bool                $webpSupported
+     * @param mixed[] $options
      *
-     * @return string
+     * @return FilterPathContainer[]
      */
-    private function getUrlOfFilteredImageByContainer(
-        FilterPathContainer $basePathContainer,
+    private function buildFilterPathContainers(string $source, string $target = '', array $options = []): array
+    {
+        $basePathContainer = new FilterPathContainer($source, $target, $options);
+        $filterPathContainers = [$basePathContainer];
+
+        if ($this->webpGenerate) {
+            $filterPathContainers[] = $basePathContainer->createWebp($this->webpOptions);
+        }
+
+        return $filterPathContainers;
+    }
+
+    private function resolveFilterPathContainer(
+        FilterPathContainer $filterPathContainer,
         string $filter,
         ?string $resolver = null,
         bool $webpSupported = false
     ): string {
-        $filterPathContainers = [$basePathContainer];
+        $path = $filterPathContainer->getTarget();
 
-        if ($this->webpGenerate) {
-            $webpPathContainer = $basePathContainer->createWebp($this->webpOptions);
-            $filterPathContainers[] = $webpPathContainer;
+        if ($this->webpGenerate && $webpSupported) {
+            $path = $filterPathContainer->createWebp($this->webpOptions)->getTarget();
         }
 
-        foreach ($filterPathContainers as $filterPathContainer) {
-            if (!$this->cacheManager->isStored($filterPathContainer->getTarget(), $filter, $resolver)) {
-                $this->cacheManager->store(
-                    $this->createFilteredBinary($filterPathContainer, $filter),
-                    $filterPathContainer->getTarget(),
-                    $filter,
-                    $resolver
-                );
-            }
-        }
-
-        if ($webpSupported && isset($webpPathContainer)) {
-            return $this->cacheManager->resolve($webpPathContainer->getTarget(), $filter, $resolver);
-        }
-
-        return $this->cacheManager->resolve($basePathContainer->getTarget(), $filter, $resolver);
+        return $this->cacheManager->resolve($path, $filter, $resolver);
     }
 
     /**
-     * @param FilterPathContainer $filterPathContainer
-     * @param string              $filter
+     * @param bool $forced Force warm up cache
      *
+     * @return bool Returns true if the cache is warmed up
+     */
+    private function warmUpCacheFilterPathContainer(
+        FilterPathContainer $filterPathContainer,
+        string $filter,
+        ?string $resolver = null,
+        bool $forced = false
+    ): bool {
+        if ($forced || !$this->cacheManager->isStored($filterPathContainer->getTarget(), $filter, $resolver)) {
+            $this->cacheManager->store(
+                $this->createFilteredBinary($filterPathContainer, $filter),
+                $filterPathContainer->getTarget(),
+                $filter,
+                $resolver
+            );
+
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
      * @throws NonExistingFilterException
-     *
-     * @return BinaryInterface
      */
     private function createFilteredBinary(FilterPathContainer $filterPathContainer, string $filter): BinaryInterface
     {
